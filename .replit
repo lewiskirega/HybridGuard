@@ -1,0 +1,7 @@
+modules = ["python-3.11"]
+[agent]
+expertMode = true
+
+[nix]
+channel = "stable-25_05"
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "imagemagickBig", "pkg-config", "qhull", "sox", "tcl", "tcpdump", "tk", "wireshark"]
