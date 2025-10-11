@@ -167,7 +167,7 @@ class DataLoader:
         for col in available_features:
             if df[col].dtype == 'object':
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-            df[col].fillna(df[col].median(), inplace=True)
+            df[col] = df[col].fillna(df[col].median())
         
         X = df[available_features].values
         

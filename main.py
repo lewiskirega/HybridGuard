@@ -42,10 +42,20 @@ class IDSController:
             if not self.train_model():
                 logger.warning("Model training failed. Using signature-based detection only.")
                 return False
-        
-        success = self.anomaly_detector.load_model()
-        if not success:
-            logger.warning("Could not load ML model. Using signature-based detection only.")
+        else:
+            success = self.anomaly_detector.load_model()
+            if success:
+                from src.model_trainer import ModelTrainer
+                scaler_path = model_path.replace('.pkl', '_scaler.pkl')
+                if os.path.exists(scaler_path):
+                    import joblib
+                    self.scaler = joblib.load(scaler_path)
+                    self.anomaly_detector.set_scaler(self.scaler)
+                    logger.info("Model and scaler loaded successfully")
+                else:
+                    logger.warning("Scaler file not found. ML detection may not work correctly.")
+            else:
+                logger.warning("Could not load ML model. Using signature-based detection only.")
         
         logger.info("IDS initialization complete")
         return True
@@ -76,7 +86,7 @@ class IDSController:
             
             trainer.visualize_results(results)
             
-            trainer.save_model()
+            trainer.save_model(scaler=self.scaler)
             
             logger.info("Model training completed successfully!")
             return True

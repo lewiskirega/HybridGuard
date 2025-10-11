@@ -117,23 +117,37 @@ class ModelTrainer:
         logger.info(f"Visualization saved to {save_path}")
         plt.close()
     
-    def save_model(self, model_path='models/isolation_forest_model.pkl'):
-        """Save trained model to disk"""
+    def save_model(self, model_path='models/isolation_forest_model.pkl', scaler=None):
+        """Save trained model and scaler to disk"""
         if self.model is None:
             raise ValueError("No model to save. Train the model first.")
         
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         joblib.dump(self.model, model_path)
         logger.info(f"Model saved to {model_path}")
+        
+        if scaler is not None:
+            scaler_path = model_path.replace('.pkl', '_scaler.pkl')
+            joblib.dump(scaler, scaler_path)
+            logger.info(f"Scaler saved to {scaler_path}")
     
     def load_model(self, model_path='models/isolation_forest_model.pkl'):
-        """Load trained model from disk"""
+        """Load trained model and scaler from disk"""
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
         
         self.model = joblib.load(model_path)
         logger.info(f"Model loaded from {model_path}")
-        return self.model
+        
+        scaler_path = model_path.replace('.pkl', '_scaler.pkl')
+        scaler = None
+        if os.path.exists(scaler_path):
+            scaler = joblib.load(scaler_path)
+            logger.info(f"Scaler loaded from {scaler_path}")
+        else:
+            logger.warning(f"Scaler file not found: {scaler_path}")
+        
+        return self.model, scaler
     
     def get_model(self):
         """Return the trained model"""
