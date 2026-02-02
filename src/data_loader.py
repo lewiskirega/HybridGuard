@@ -1,6 +1,9 @@
 """
-Data Loader for CIC-IDS2017 Dataset
-Handles loading, preprocessing, and feature extraction
+Data Loader for CIC-IDS2017 Dataset.
+
+Loads CSV files from data/cic_ids_2017/ or generates sample data if missing.
+Preprocesses with config.LIVE_FEATURE_COLUMNS (21 features) so the trained
+model matches what the packet sniffer produces at inference time.
 """
 
 import pandas as pd
@@ -9,16 +12,24 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 import os
 import logging
 
+from src.config import DATA_DIR, LIVE_FEATURE_COLUMNS, TRAIN_RATIO
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class DataLoader:
-    def __init__(self, data_dir='data/cic_ids_2017'):
-        self.data_dir = data_dir
-        self.scaler = StandardScaler()
+    """
+    Loads and preprocesses CIC-IDS2017 (or sample) data for training.
+    Use preprocess_data(..., use_live_features_only=True) so the model
+    uses the same 21 features as the sniffer.
+    """
+
+    def __init__(self, data_dir=None):
+        self.data_dir = data_dir or DATA_DIR
+        self.scaler = StandardScaler()  # Fitted on train; used for live normalization
         self.label_encoder = LabelEncoder()
-        
+        # Full CIC-IDS2017 feature set (used only when use_live_features_only=False)
         self.feature_columns = [
             'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
             'Total Length of Fwd Packets', 'Total Length of Bwd Packets',
@@ -47,7 +58,7 @@ class DataLoader:
         ]
     
     def load_csv_files(self):
-        """Load all CSV files from the dataset directory"""
+        """Load all CSV files from data_dir; if empty or missing, return generated sample data."""
         if not os.path.exists(self.data_dir):
             logger.warning(f"Dataset directory {self.data_dir} does not exist. Creating sample data...")
             return self._create_sample_data()
@@ -76,7 +87,7 @@ class DataLoader:
             return self._create_sample_data()
     
     def _create_sample_data(self):
-        """Create sample data for demonstration when dataset is not available"""
+        """Generate synthetic normal-traffic-like data when CIC-IDS2017 is not available."""
         logger.info("Creating sample training data...")
         np.random.seed(42)
         n_samples = 10000
@@ -148,39 +159,55 @@ class DataLoader:
         
         return pd.DataFrame(data)
     
-    def preprocess_data(self, df):
-        """Clean and preprocess the dataset"""
+    def preprocess_data(self, df, use_live_features_only=True):
+        """Clean and preprocess the dataset.
+        If use_live_features_only=True, use only the 21 features the sniffer produces,
+        so the trained model matches live traffic (no train/serve mismatch).
+        """
         logger.info("Preprocessing data...")
         
         df = df.copy()
-        
         df.columns = df.columns.str.strip()
-        
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         
-        available_features = [col for col in self.feature_columns if col in df.columns]
-        missing_features = [col for col in self.feature_columns if col not in df.columns]
-        
-        if missing_features:
-            logger.warning(f"Missing features: {missing_features[:5]}...")
-        
-        for col in available_features:
-            if df[col].dtype == 'object':
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            df[col] = df[col].fillna(df[col].median())
-        
-        X = df[available_features].values
+        if use_live_features_only:
+            # Train on same 21 features as PacketSniffer + AnomalyDetector
+            available_features = [c for c in LIVE_FEATURE_COLUMNS if c in df.columns]
+            missing_in_data = [c for c in LIVE_FEATURE_COLUMNS if c not in df.columns]
+            if missing_in_data:
+                logger.warning(f"Dataset missing live features (will add 0): {missing_in_data[:5]}...")
+            for col in LIVE_FEATURE_COLUMNS:
+                if col not in df.columns:
+                    df[col] = 0
+                elif df[col].dtype == 'object':
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = df[col].fillna(df[col].median() if df[col].notna().any() else 0)
+            X = df[LIVE_FEATURE_COLUMNS].values
+            feature_names = list(LIVE_FEATURE_COLUMNS)
+        else:
+            available_features = [col for col in self.feature_columns if col in df.columns]
+            missing_features = [col for col in self.feature_columns if col not in df.columns]
+            if missing_features:
+                logger.warning(f"Missing features: {missing_features[:5]}...")
+            for col in available_features:
+                if df[col].dtype == 'object':
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = df[col].fillna(df[col].median())
+            X = df[available_features].values
+            feature_names = available_features
         
         if 'Label' in df.columns:
-            y = df['Label'].values
+            y = np.where(df['Label'].astype(str).str.strip().str.upper() == 'BENIGN', 'BENIGN', 'ATTACK')
         else:
             y = np.array(['BENIGN'] * len(df))
         
-        logger.info(f"Preprocessed data shape: {X.shape}")
-        return X, y, available_features
+        logger.info(f"Preprocessed data shape: {X.shape} (live_features_only={use_live_features_only})")
+        return X, y, feature_names
     
-    def split_data(self, X, y, train_ratio=0.7, use_normal_only=True):
+    def split_data(self, X, y, train_ratio=None, use_normal_only=True):
         """Split data into training and testing sets"""
+        if train_ratio is None:
+            train_ratio = TRAIN_RATIO
         if use_normal_only:
             normal_indices = np.where(y == 'BENIGN')[0]
             logger.info(f"Using {len(normal_indices)} normal traffic samples for training")

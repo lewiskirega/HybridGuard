@@ -27,20 +27,112 @@ A comprehensive network intrusion detection system that combines machine learnin
 ## Installation
 
 ### Prerequisites
-- Python 3.8 or higher
-- Administrator/root privileges (required for packet capture)
+- Python 3.11 or higher (see `pyproject.toml`)
+- For **live packet capture**: administrator/root privileges (see [How to Run](#how-to-run))
 
-### Quick Start
+### Install dependencies
 
-1. **Install Dependencies**
-   ```bash
-   # Dependencies are already installed in this Replit environment
-   ```
+From the project root, use a virtual environment (recommended):
 
-2. **Run the Application**
-   ```bash
-   python main.py
-   ```
+```bash
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate    # Windows
+
+# Option A: with uv (if installed)
+uv sync
+
+# Option B: with pip
+pip install -e .
+# or: pip install joblib matplotlib numpy pandas scapy scikit-learn
+```
+
+---
+
+## How to Run
+
+### 1. GUI (with or without live capture)
+
+```bash
+# Without root: app starts, model loads/trains, GUI opens. Click "Start Monitoring" will fail with a clear message.
+python main.py
+
+# With root (required for live packet capture):
+sudo python main.py   # Linux/macOS
+# Windows: open terminal as Administrator, then: python main.py
+```
+
+- **First run**: If no model exists, the app trains one on sample data (1–2 minutes), then opens the GUI.
+- **Start Monitoring**: Starts packet capture. If you see "Failed to start monitoring", you need root/sudo (see above).
+- **Stop Monitoring / Clear Alerts / Export Alerts**: Use the GUI buttons.
+
+### 2. Test detection without root (no packet capture)
+
+You can verify that signature and ML detection work using simulated flows:
+
+```bash
+python tests/test_detection.py
+```
+
+This runs synthetic attacks (SQLi, XSS, SYN flood, port scan) through the same pipeline and prints whether each signature fired. No admin rights needed.
+
+### 3. Test with a PCAP file (no root)
+
+If you have a `.pcap` file (e.g. from Wireshark or a test lab):
+
+```bash
+python tests/replay_pcap.py path/to/file.pcap
+```
+
+Packets are replayed through the same flow aggregation and detection logic as live capture. Useful for demos and testing without raw sockets.
+
+---
+
+## How to Test (full workflow)
+
+### Option A: Same machine, no VM
+
+1. **Install and open GUI (no root)**  
+   `python main.py` → wait for model training (first time) → GUI opens.
+2. **Verify detection logic (no root)**  
+   `python tests/test_detection.py` → expect "All signature detection tests PASSED."
+3. **Live capture (with root)**  
+   `sudo python main.py` → Start Monitoring → generate traffic (browse, ping, etc.) → check alerts in the dashboard and export if needed.
+
+### Option B: VirtualBox (two VMs)
+
+Use two VMs when you want to test with real traffic between machines without affecting your host. **See [VM_SETUP.md](VM_SETUP.md)** for:
+
+- **Recommended OS**: Ubuntu 22.04 LTS for both VMs (or Kali/Parrot for VM 2 if you prefer security tools preinstalled).
+- Step-by-step VirtualBox setup (create VMs, network, install Python, run HybridGuard, generate traffic).
+
+Summary:
+
+1. **VM 1 – HybridGuard (monitor)**  
+   - Install Python and dependencies; run: `sudo python main.py`.  
+   - Start Monitoring (sniffer on default interface; use host-only or bridged so VM 2 is on same network).
+
+2. **VM 2 – Traffic generator**  
+   - Install `nmap`, `hping3`; run port scan: `nmap -sT <VM1_IP>`; optionally SYN flood: `sudo hping3 -S -p 80 --flood <VM1_IP>`.
+
+3. **Observe**  
+   Alerts appear in VM 1’s GUI and in `logs/alerts.log`.
+
+### Option C: Single machine with PCAP
+
+1. Capture traffic (e.g. Wireshark) while you browse or run tools.  
+2. Save as `capture.pcap`.  
+3. Run: `python tests/replay_pcap.py capture.pcap`.  
+4. Check console output for alert counts and types.
+
+---
+
+## Quick Start (minimal)
+
+1. **Install**: `uv sync` or `pip install -e .`
+2. **Run**: `python main.py` (use `sudo python main.py` for live capture)
+3. **Test without root**: `python tests/test_detection.py`
 
 ## Usage
 
@@ -72,19 +164,23 @@ To use the real CIC-IDS2017 dataset:
 ## Project Structure
 
 ```
-hybrid_ids/
+HybridGuard/
 ├── main.py                 # Application entry point
+├── VM_SETUP.md             # VM testing guide (OS, VirtualBox, traffic generation)
 ├── src/
-│   ├── __init__.py
+│   ├── config.py           # Paths, thresholds, live feature set
 │   ├── data_loader.py      # Dataset loading and preprocessing
 │   ├── model_trainer.py    # ML model training and evaluation
 │   ├── packet_sniffer.py   # Real-time packet capture with Scapy
 │   ├── signature_detector.py # Rule-based detection engine
 │   ├── anomaly_detector.py # ML-based anomaly detection
 │   ├── alert_manager.py    # Alert handling and logging
-│   └── gui.py             # Tkinter GUI
+│   └── gui.py              # Tkinter GUI
+├── tests/
+│   ├── test_detection.py   # Test detection without root (simulated flows)
+│   └── replay_pcap.py      # Replay PCAP through full pipeline
 ├── models/                 # Trained ML models
-├── data/                   # Dataset storage
+├── data/                   # Dataset storage (CIC-IDS2017 or generated)
 └── logs/                   # Alert logs and exports
 ```
 
@@ -148,6 +244,10 @@ The system displays the following metrics after training:
 - Check if sufficient memory is available (>2GB recommended)
 - Verify dataset files are not corrupted
 - Check logs for specific error messages
+
+### "Scaler/model expects 61 features" or ML errors in tests
+- The app now trains on 21 features (same as live traffic). If you have an **old model** (trained with 61 features), delete it and restart so the app retrains with 21:  
+  `rm -f models/isolation_forest_model.pkl models/isolation_forest_model_scaler.pkl` then run `python main.py` or `python tests/test_detection.py` again.
 
 ### GUI Not Responding
 - Ensure Tkinter is installed (should be included with Python)

@@ -1,6 +1,9 @@
 """
-Model Trainer for Isolation Forest
-Handles training, evaluation, and model persistence
+Model Trainer for Isolation Forest.
+
+Trains an Isolation Forest on (normal) flow features, evaluates with
+accuracy/precision/recall/F1 and confusion matrix, saves model and scaler
+for use by the anomaly detector at inference time.
 """
 
 from sklearn.ensemble import IsolationForest
@@ -16,14 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 class ModelTrainer:
+    """
+    Trains and evaluates Isolation Forest; saves/loads model and scaler.
+    Expects X_train to have the same 21 features as LIVE_FEATURE_COLUMNS.
+    """
+
     def __init__(self, contamination=0.1, n_estimators=100, random_state=42):
-        self.contamination = contamination
+        self.contamination = contamination  # Expected fraction of anomalies
         self.n_estimators = n_estimators
         self.random_state = random_state
         self.model = None
-    
+
     def train(self, X_train):
-        """Train Isolation Forest model on normal traffic"""
+        """Fit Isolation Forest on (normal) flow feature matrix X_train."""
         logger.info(f"Training Isolation Forest with {self.n_estimators} estimators...")
         
         self.model = IsolationForest(
@@ -31,7 +39,7 @@ class ModelTrainer:
             n_estimators=self.n_estimators,
             random_state=self.random_state,
             n_jobs=-1,
-            verbose=1
+            verbose=0,
         )
         
         self.model.fit(X_train)
@@ -40,7 +48,7 @@ class ModelTrainer:
         return self.model
     
     def evaluate(self, X_test, y_test):
-        """Evaluate model performance"""
+        """Compute accuracy, precision, recall, F1, and confusion matrix (binary: normal vs anomaly)."""
         if self.model is None:
             raise ValueError("Model not trained yet. Call train() first.")
         

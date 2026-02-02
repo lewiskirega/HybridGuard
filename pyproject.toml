@@ -1,7 +1,7 @@
 [project]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "Add your description here"
+name = "hybridguard"
+version = "1.0.0"
+description = "Hybrid Intrusion Detection System: ML anomaly detection + signature-based rules"
 requires-python = ">=3.11"
 dependencies = [
     "joblib>=1.5.2",
@@ -11,3 +11,6 @@ dependencies = [
     "scapy>=2.6.1",
     "scikit-learn>=1.7.2",
 ]
+
+[project.scripts]
+hybridguard = "main:main"

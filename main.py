@@ -1,6 +1,12 @@
 """
-Main Application Entry Point for Hybrid IDS
-Integrates all components and launches the system
+Main Application Entry Point for HybridGuard IDS.
+
+HybridGuard is a hybrid intrusion detection system that combines:
+  - Signature-based detection: rules for SYN flood, port scan, SQLi, XSS, ICMP flood.
+  - ML-based detection: Isolation Forest on flow features (trained on normal traffic).
+
+This module wires together the packet sniffer, signature detector, anomaly detector,
+alert manager, and GUI. Run with root/sudo for live packet capture (see VM_SETUP.md).
 """
 
 import tkinter as tk
@@ -11,6 +17,15 @@ from src.signature_detector import SignatureDetector
 from src.anomaly_detector import AnomalyDetector
 from src.alert_manager import AlertManager
 from src.gui import IDSGUI
+from src.config import (
+    MODEL_PATH,
+    get_scaler_path,
+    LOG_DIR,
+    FLOW_TIMEOUT_SEC,
+    CLEANUP_STATS_EVERY_N_FLOWS,
+    TRAIN_CONTAMINATION,
+    TRAIN_N_ESTIMATORS,
+)
 import logging
 import os
 import sys
@@ -23,30 +38,33 @@ logger = logging.getLogger(__name__)
 
 
 class IDSController:
+    """
+    Central controller for the IDS: initializes model/signatures, starts/stops
+    the sniffer, and routes each flow through signature then ML detection.
+    """
+
     def __init__(self):
         self.alert_manager = AlertManager()
         self.signature_detector = SignatureDetector()
         self.anomaly_detector = AnomalyDetector()
-        self.packet_sniffer = None
-        self.scaler = None
+        self.packet_sniffer = None  # Created on start(); requires root for capture
+        self.scaler = None  # Loaded with model; used to normalize flow features for ML
         self.packet_count = 0
-        
+
     def initialize(self):
-        """Initialize the IDS system"""
-        logger.info("Initializing Hybrid IDS...")
-        
-        model_path = 'models/isolation_forest_model.pkl'
-        
-        if not os.path.exists(model_path):
-            logger.info("Trained model not found. Training new model...")
+        """Load or train the ML model and scaler; prepare for monitoring."""
+        logger.info("Initializing HybridGuard IDS...")
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+        scaler_path = get_scaler_path()
+
+        if not os.path.exists(MODEL_PATH):
+            logger.info("Trained model not found. Training new model (using live feature set)...")
             if not self.train_model():
                 logger.warning("Model training failed. Using signature-based detection only.")
                 return False
         else:
             success = self.anomaly_detector.load_model()
             if success:
-                from src.model_trainer import ModelTrainer
-                scaler_path = model_path.replace('.pkl', '_scaler.pkl')
                 if os.path.exists(scaler_path):
                     import joblib
                     self.scaler = joblib.load(scaler_path)
@@ -56,12 +74,12 @@ class IDSController:
                     logger.warning("Scaler file not found. ML detection may not work correctly.")
             else:
                 logger.warning("Could not load ML model. Using signature-based detection only.")
-        
+
         logger.info("IDS initialization complete")
         return True
     
     def train_model(self):
-        """Train the Isolation Forest model"""
+        """Train the Isolation Forest on (normal) traffic; use 21 live features only."""
         try:
             logger.info("Loading and preprocessing dataset...")
             data_loader = DataLoader()
@@ -79,14 +97,14 @@ class IDSController:
             self.anomaly_detector.set_scaler(self.scaler)
             
             logger.info("Training Isolation Forest model...")
-            trainer = ModelTrainer(contamination=0.1, n_estimators=100)
+            trainer = ModelTrainer(
+                contamination=TRAIN_CONTAMINATION,
+                n_estimators=TRAIN_N_ESTIMATORS,
+            )
             trainer.train(X_train_scaled)
-            
             results = trainer.evaluate(X_test_scaled, y_test)
-            
             trainer.visualize_results(results)
-            
-            trainer.save_model(scaler=self.scaler)
+            trainer.save_model(model_path=MODEL_PATH, scaler=self.scaler)
             
             logger.info("Model training completed successfully!")
             return True
@@ -96,11 +114,16 @@ class IDSController:
             return False
     
     def process_flow(self, flow_features):
-        """Process a network flow through detection engines"""
+        """
+        Run one flow through detection: signature rules first, then ML if no signature hit.
+        Periodically clean signature detector state to avoid unbounded memory growth.
+        """
         self.packet_count += 1
-        
+        if self.packet_count % CLEANUP_STATS_EVERY_N_FLOWS == 0:
+            self.signature_detector.cleanup_old_stats()
+
         signature_alerts = self.signature_detector.detect(flow_features)
-        
+
         for alert in signature_alerts:
             self.alert_manager.add_alert(
                 source=alert.get('src_ip', 'Unknown'),
@@ -110,9 +133,10 @@ class IDSController:
             )
             logger.warning(f"[SIGNATURE] {alert['type']}: {alert['description']}")
         
+        # Only run ML when no signature matched (avoids duplicate alerts)
         if not signature_alerts:
             ml_result = self.anomaly_detector.predict(flow_features)
-            
+
             if ml_result and ml_result['is_anomaly']:
                 self.alert_manager.add_alert(
                     source=flow_features.get('src_ip', 'Unknown'),
@@ -124,16 +148,16 @@ class IDSController:
                 logger.info(f"[ML] Anomaly detected: {flow_features.get('src_ip', 'Unknown')}")
     
     def start(self):
-        """Start the IDS monitoring"""
+        """Start the IDS monitoring. Requires root/sudo on Linux for packet capture."""
         try:
             logger.info("Starting IDS monitoring...")
-            
-            self.packet_sniffer = PacketSniffer(interface=None, flow_timeout=5)
+            self.packet_sniffer = PacketSniffer(interface=None, flow_timeout=FLOW_TIMEOUT_SEC)
             self.packet_sniffer.start(callback=self.process_flow)
-            
+            if not self.packet_sniffer.running:
+                logger.error("Packet capture failed (often due to missing root/sudo).")
+                return False
             logger.info("IDS monitoring started successfully")
             return True
-            
         except Exception as e:
             logger.error(f"Error starting IDS: {e}")
             return False
@@ -168,7 +192,7 @@ class IDSController:
 
 
 def main():
-    """Main application entry point"""
+    """Start HybridGuard: load/train model, open GUI, run event loop."""
     logger.info("Starting Hybrid Intrusion Detection System...")
     
     controller = IDSController()

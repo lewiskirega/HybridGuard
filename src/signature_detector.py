@@ -1,6 +1,9 @@
 """
-Signature-based Detection Engine
-Implements rule-based detection for known attack patterns
+Signature-based Detection Engine.
+
+Rule-based detection for known attack patterns: SYN flood, port scan,
+SQL injection, XSS, and ICMP flood. Uses per-IP state with time windows;
+call cleanup_old_stats() periodically to avoid unbounded memory growth.
 """
 
 from collections import defaultdict
@@ -13,10 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 class SignatureDetector:
+    """
+    Applies signature rules to each flow; returns list of alerts (type, severity, description).
+    State is per source IP (SYN timestamps, ports seen) and is time-windowed.
+    """
+
     def __init__(self):
+        # Per-IP state: SYN timestamps (10s window), (port, time) for port scan (30s window)
         self.ip_stats = defaultdict(lambda: {
             'syn_packets': [],
-            'ports': set(),
+            'ports': set(),  # (port, timestamp) tuples
             'port_attempts': []
         })
         self.sql_injection_patterns = [
@@ -39,7 +48,7 @@ class SignatureDetector:
         ]
     
     def detect_syn_flood(self, flow_features):
-        """Detect SYN flood attacks"""
+        """Alert if >100 SYN packets from same src_ip within 10 seconds."""
         src_ip = flow_features.get('src_ip', '')
         current_time = time.time()
         syn_count = flow_features.get('SYN Flag Count', 0)
@@ -66,23 +75,30 @@ class SignatureDetector:
         return {'detected': False}
     
     def detect_port_scan(self, flow_features):
-        """Detect port scanning attacks"""
+        """Alert if >20 unique destination ports from same src_ip within 30 seconds."""
         src_ip = flow_features.get('src_ip', '')
         dst_port = flow_features.get('packets', [{}])[0].get('dst_port', 0) if flow_features.get('packets') else 0
         current_time = time.time()
-        
+        WINDOW_SEC = 30
+
         if dst_port:
-            self.ip_stats[src_ip]['ports'].add(dst_port)
+            self.ip_stats[src_ip]['ports'].add((dst_port, current_time))
             self.ip_stats[src_ip]['port_attempts'].append(current_time)
-        
+
+        # Keep only attempts in the last WINDOW_SEC
         self.ip_stats[src_ip]['port_attempts'] = [
             t for t in self.ip_stats[src_ip]['port_attempts']
-            if current_time - t < 30
+            if current_time - t < WINDOW_SEC
         ]
-        
-        unique_ports = len(self.ip_stats[src_ip]['ports'])
+        # Keep only (port, time) entries in the last WINDOW_SEC
+        self.ip_stats[src_ip]['ports'] = {
+            (port, t) for port, t in self.ip_stats[src_ip]['ports']
+            if current_time - t < WINDOW_SEC
+        }
+
+        unique_ports = len({port for port, _ in self.ip_stats[src_ip]['ports']})
         recent_attempts = len(self.ip_stats[src_ip]['port_attempts'])
-        
+
         if unique_ports > 20 and recent_attempts > 20:
             return {
                 'detected': True,
@@ -95,7 +111,7 @@ class SignatureDetector:
         return {'detected': False}
     
     def detect_sql_injection(self, flow_features):
-        """Detect SQL injection attempts in payload"""
+        """Scan flow packet payloads for SQLi patterns (union select, or 1=1, etc.)."""
         packets = flow_features.get('packets', [])
         
         for packet in packets:
@@ -119,7 +135,7 @@ class SignatureDetector:
         return {'detected': False}
     
     def detect_xss(self, flow_features):
-        """Detect Cross-Site Scripting (XSS) attempts"""
+        """Scan flow packet payloads for XSS patterns (script, javascript:, etc.)."""
         packets = flow_features.get('packets', [])
         
         for packet in packets:
@@ -143,7 +159,7 @@ class SignatureDetector:
         return {'detected': False}
     
     def detect_icmp_flood(self, flow_features):
-        """Detect ICMP flood attacks (large ICMP packets or high frequency)"""
+        """Alert on large ICMP packets or high ICMP packet rate from same source."""
         protocol = flow_features.get('protocol', 0)
         packet_length = flow_features.get('Max Packet Length', 0)
         packets_per_sec = flow_features.get('Flow Packets/s', 0)
@@ -170,7 +186,7 @@ class SignatureDetector:
         return {'detected': False}
     
     def detect(self, flow_features):
-        """Run all signature-based detection rules"""
+        """Run all signature rules; return list of dicts (detected, type, severity, description, src_ip)."""
         alerts = []
         
         detections = [
@@ -188,9 +204,21 @@ class SignatureDetector:
         return alerts
     
     def cleanup_old_stats(self, max_age=300):
-        """Clean up old statistics to prevent memory issues"""
+        """Prune per-IP state to recent windows only; drop IPs with no recent activity."""
         current_time = time.time()
-        
+
         for ip in list(self.ip_stats.keys()):
-            if not self.ip_stats[ip]['syn_packets'] and not self.ip_stats[ip]['port_attempts']:
+            self.ip_stats[ip]['syn_packets'] = [
+                t for t in self.ip_stats[ip]['syn_packets']
+                if current_time - t < 10
+            ]
+            self.ip_stats[ip]['port_attempts'] = [
+                t for t in self.ip_stats[ip]['port_attempts']
+                if current_time - t < 30
+            ]
+            self.ip_stats[ip]['ports'] = {
+                (port, t) for port, t in self.ip_stats[ip]['ports']
+                if current_time - t < 30
+            }
+            if not self.ip_stats[ip]['syn_packets'] and not self.ip_stats[ip]['port_attempts'] and not self.ip_stats[ip]['ports']:
                 del self.ip_stats[ip]

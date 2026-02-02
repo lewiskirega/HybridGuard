@@ -1,6 +1,10 @@
 """
-Real-time Packet Sniffer using Scapy
-Captures and extracts features from network traffic
+Real-time Packet Sniffer using Scapy.
+
+Captures IP traffic on the given interface (or default), aggregates packets
+into flows by (src_ip:src_port, dst_ip:dst_port, protocol), and when a flow
+is idle for flow_timeout seconds, computes flow features and calls the
+callback. Requires root/sudo for raw capture. Used by IDSController.
 """
 
 from scapy.all import AsyncSniffer, IP, TCP, UDP, ICMP
@@ -15,11 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 class PacketSniffer:
+    """
+    Captures packets with Scapy, aggregates by flow, and invokes callback
+    with flow features when a flow expires (no packets for flow_timeout sec).
+    """
+
     def __init__(self, interface=None, flow_timeout=5):
-        self.interface = interface
-        self.flow_timeout = flow_timeout
+        self.interface = interface  # None = default interface
+        self.flow_timeout = flow_timeout  # Seconds of inactivity before flow is closed
         self.sniffer = None
         self.running = False
+        # Per-flow state: packets, byte counts, TCP flags, etc.
         self.flows = defaultdict(lambda: {
             'packets': [],
             'start_time': None,
@@ -36,7 +46,7 @@ class PacketSniffer:
         self.cleanup_thread = None
     
     def extract_packet_features(self, packet):
-        """Extract features from a single packet"""
+        """Parse IP/TCP/UDP fields and build a flow key; return dict or None if not IP."""
         if not packet.haslayer(IP):
             return None
         
@@ -82,7 +92,7 @@ class PacketSniffer:
             return None
     
     def packet_handler(self, packet):
-        """Handle incoming packets and aggregate into flows"""
+        """Called by Scapy for each packet; updates the corresponding flow under lock."""
         features = self.extract_packet_features(packet)
         if not features:
             return
@@ -130,7 +140,7 @@ class PacketSniffer:
                     flow['tcp_flags']['URG'] += 1
     
     def cleanup_flows(self):
-        """Periodically clean up expired flows"""
+        """Background loop: every 1s, close flows idle for flow_timeout and call flow_callback."""
         while self.running:
             time.sleep(1)
             current_time = time.time()
@@ -149,7 +159,7 @@ class PacketSniffer:
                     del self.flows[flow_key]
     
     def compute_flow_features(self, flow_key):
-        """Compute aggregated features for a flow"""
+        """Build the 21-feature dict for one flow (matches LIVE_FEATURE_COLUMNS for ML)."""
         flow = self.flows[flow_key]
         
         if not flow['packets']:
@@ -159,7 +169,10 @@ class PacketSniffer:
         duration = max(duration, 0.000001)
         
         packet_lengths = np.array(flow['packet_lengths']) if flow['packet_lengths'] else np.array([0])
-        
+        n_pl = len(packet_lengths)
+        pl_mean = float(np.mean(packet_lengths))
+        pl_std = float(np.std(packet_lengths)) if n_pl >= 2 else 0.0  # avoid NaN for single-packet flows
+
         features = {
             'Flow Duration': duration * 1000000,
             'Total Fwd Packets': flow['fwd_packets'],
@@ -172,8 +185,8 @@ class PacketSniffer:
             'Bwd Packet Length Std': 0,
             'Flow Bytes/s': (flow['fwd_bytes'] + flow['bwd_bytes']) / duration,
             'Flow Packets/s': (flow['fwd_packets'] + flow['bwd_packets']) / duration,
-            'Packet Length Mean': np.mean(packet_lengths),
-            'Packet Length Std': np.std(packet_lengths),
+            'Packet Length Mean': pl_mean,
+            'Packet Length Std': pl_std,
             'Min Packet Length': np.min(packet_lengths),
             'Max Packet Length': np.max(packet_lengths),
             'SYN Flag Count': flow['tcp_flags'].get('SYN', 0),
@@ -216,11 +229,13 @@ class PacketSniffer:
             self.cleanup_thread.start()
             
             logger.info("Packet capture started successfully")
+            return True
         except Exception as e:
             logger.error(f"Error starting packet capture: {e}")
-            logger.info("Note: Packet capture requires administrator/root privileges")
+            logger.info("Note: Packet capture requires administrator/root privileges (e.g. sudo python main.py)")
             self.running = False
-    
+            return False
+
     def stop(self):
         """Stop packet capture"""
         if not self.running:

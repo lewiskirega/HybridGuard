@@ -1,6 +1,9 @@
 """
-Tkinter GUI for Hybrid Intrusion Detection System
-Real-time dashboard, alerts, and controls
+Tkinter GUI for HybridGuard IDS.
+
+Dashboard: packet count, alert counts by severity, filterable alert table,
+system log panel. Start/Stop Monitoring, Clear Alerts, Export Alerts.
+Updates every second from a background thread via root.after().
 """
 
 import tkinter as tk
@@ -15,16 +18,22 @@ logger = logging.getLogger(__name__)
 
 
 class IDSGUI:
+    """
+    Main window: control panel, stats, alert table (filter by severity), log area.
+    Binds to IDSController for start/stop, get_recent_alerts, get_statistics, export.
+    """
+
     def __init__(self, root, ids_controller=None):
         self.root = root
         self.root.title("Hybrid Intrusion Detection System")
         self.root.geometry("1400x800")
-        
+
         self.ids_controller = ids_controller
         self.monitoring = False
         self.update_thread = None
         self.running = True
-        
+
+        # Row background colors in alert table by severity
         self.severity_colors = {
             'CRITICAL': '#e74c3c',
             'HIGH': '#e67e22',
@@ -37,7 +46,7 @@ class IDSGUI:
         self._setup_update_loop()
     
     def _create_widgets(self):
-        """Create all GUI widgets"""
+        """Build control panel, dashboard stats, alert treeview, and log text area."""
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -154,7 +163,13 @@ class IDSGUI:
                 self.status_label.config(text="Online", foreground="green")
                 self._log_message("Monitoring started")
             else:
-                messagebox.showerror("Error", "Failed to start monitoring. Check system logs.")
+                messagebox.showerror(
+                    "Failed to start monitoring",
+                    "Packet capture requires root/administrator privileges.\n\n"
+                    "Linux/macOS: run in terminal:\n  sudo python main.py\n\n"
+                    "Windows: run terminal as Administrator.\n\n"
+                    "You can still test detection using: python tests/test_detection.py"
+                )
         else:
             self._log_message("No IDS controller available")
     
@@ -236,7 +251,7 @@ class IDSGUI:
         self.log_text.config(state='disabled')
     
     def _setup_update_loop(self):
-        """Set up periodic UI updates"""
+        """Start a daemon thread that refreshes alerts and stats every 1s while monitoring."""
         def update_loop():
             while self.running:
                 if self.monitoring:

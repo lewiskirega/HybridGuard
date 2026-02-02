@@ -24,6 +24,7 @@ MANIFEST
 # Virtual Environment
 .pythonlibs/
 venv/
+.venv/
 ENV/
 env/
 
@@ -34,10 +35,15 @@ env/
 *.swo
 *~
 
-# Logs
+# Logs and exports
 logs/*.log
 logs/*.json
+logs/alerts_export_*.json
 *.log
+
+# Captures (keep out of repo)
+*.pcap
+*.pcapng
 
 # Models (keep the directory but ignore models)
 models/*.pkl

@@ -1,6 +1,8 @@
 """
-Alert Manager for IDS
-Thread-safe alert handling, logging, and statistics
+Alert Manager for IDS.
+
+Thread-safe in-memory alert list, file logging (alerts.log), and JSON export.
+Used by IDSController to store signature and ML alerts; GUI reads via get_recent_alerts.
 """
 
 import threading
@@ -10,24 +12,31 @@ import json
 import os
 import logging
 
+from src.config import LOG_DIR
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class AlertManager:
-    def __init__(self, log_dir='logs'):
+    """
+    Holds alerts in memory (capped at max_alerts), appends to alerts.log,
+    and supports filter/export. All mutations are under self.lock.
+    """
+
+    def __init__(self, log_dir=None):
         self.alerts = []
         self.lock = threading.Lock()
-        self.log_dir = log_dir
-        self.statistics = defaultdict(int)
-        self.max_alerts = 1000
-        
-        os.makedirs(log_dir, exist_ok=True)
-        
-        self.alert_log_file = os.path.join(log_dir, 'alerts.log')
-    
+        self.statistics = defaultdict(int)  # severity -> count, plus 'total'
+        self.max_alerts = 1000  # Rotate oldest out when exceeded
+        self.log_dir = log_dir or LOG_DIR
+
+        os.makedirs(self.log_dir, exist_ok=True)
+
+        self.alert_log_file = os.path.join(self.log_dir, 'alerts.log')
+
     def add_alert(self, source, alert_type, severity, description, additional_data=None):
-        """Add a new alert to the system"""
+        """Append one alert; update stats; write line to alerts.log."""
         with self.lock:
             timestamp = datetime.now()
             
