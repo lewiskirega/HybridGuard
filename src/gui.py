@@ -7,7 +7,7 @@ Updates every second from a background thread via root.after().
 """
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import time
 from datetime import datetime
@@ -53,7 +53,7 @@ class IDSGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(2, weight=1)
+        main_frame.rowconfigure(3, weight=1)
         
         control_frame = ttk.LabelFrame(main_frame, text="Control Panel", padding="10")
         control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
@@ -70,6 +70,8 @@ class IDSGUI:
         
         ttk.Button(control_frame, text="Clear Alerts", command=self._clear_alerts).grid(row=0, column=4, padx=5)
         ttk.Button(control_frame, text="Export Alerts", command=self._export_alerts).grid(row=0, column=5, padx=5)
+        ttk.Button(control_frame, text="Download Report (PDF)", command=self._export_pdf).grid(row=0, column=6, padx=5)
+        ttk.Button(control_frame, text="Clear Logs", command=self._clear_logs).grid(row=0, column=7, padx=5)
         
         dashboard_frame = ttk.LabelFrame(main_frame, text="Dashboard", padding="10")
         dashboard_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
@@ -83,8 +85,17 @@ class IDSGUI:
         self.high_count_label = self._create_stat_widget(stats_frame, "High", "0", 3, fg='#e67e22')
         self.medium_count_label = self._create_stat_widget(stats_frame, "Medium", "0", 4, fg='#f39c12')
         
+        intrusion_frame = ttk.LabelFrame(main_frame, text="Intrusion detection", padding="8")
+        intrusion_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        intrusion_info = (
+            "This system detects any of the following intrusions; all appear in the Alerts table below. "
+            "Signature: SYN Flood, Port Scan, SQL Injection, XSS, ICMP Flood. "
+            "ML: Anomaly (Isolation Forest). Filter by severity or export via Export Alerts."
+        )
+        ttk.Label(intrusion_frame, text=intrusion_info, wraplength=1200, justify=tk.LEFT).pack(anchor=tk.W)
+        
         alerts_frame = ttk.LabelFrame(main_frame, text="Alerts", padding="10")
-        alerts_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        alerts_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         alert_controls = ttk.Frame(alerts_frame)
         alert_controls.pack(fill=tk.X, pady=(0, 5))
@@ -131,7 +142,7 @@ class IDSGUI:
         self._create_tags()
         
         log_frame = ttk.LabelFrame(main_frame, text="System Logs", padding="10")
-        log_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
+        log_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=8, state='disabled')
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -197,12 +208,40 @@ class IDSGUI:
             self._update_statistics()
     
     def _export_alerts(self):
-        """Export alerts to file"""
+        """Export alerts to JSON file"""
         if self.ids_controller:
             filename = self.ids_controller.export_alerts()
             if filename:
                 self._log_message(f"Alerts exported to {filename}")
                 messagebox.showinfo("Export Success", f"Alerts exported to:\n{filename}")
+
+    def _export_pdf(self):
+        """Download report as PDF (save dialog)."""
+        if not self.ids_controller:
+            return
+        default_name = f"HybridGuard_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialfile=default_name,
+        )
+        if filepath:
+            result = self.ids_controller.export_alerts_pdf(filepath)
+            if result:
+                self._log_message(f"Report saved to {result}")
+                messagebox.showinfo("Report Saved", f"PDF report saved to:\n{result}")
+            else:
+                messagebox.showerror("Export Failed", "Could not save PDF. Ensure fpdf2 is installed: pip install fpdf2")
+
+    def _clear_logs(self):
+        """Clear all log and export files from disk."""
+        if not messagebox.askyesno("Clear Logs", "Remove all log and export files from the logs folder? This cannot be undone."):
+            return
+        if self.ids_controller:
+            removed = self.ids_controller.clear_logs()
+            count = len(removed) if isinstance(removed, list) else 0
+            self._log_message(f"Cleared {count} log/export file(s) from disk")
+            messagebox.showinfo("Logs Cleared", f"Removed {count} file(s) from logs folder.")
     
     def _update_alerts_display(self):
         """Update the alerts display"""

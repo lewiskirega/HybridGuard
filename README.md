@@ -6,7 +6,7 @@ A comprehensive network intrusion detection system that combines machine learnin
 
 ### 🤖 Machine Learning Detection
 - **Isolation Forest** algorithm for anomaly detection
-- Trained on CIC-IDS2017 dataset (or sample data)
+- Uses pre-trained Isolation Forest model (no CSV data or training step)
 - Real-time flow analysis and prediction
 - Confidence scoring for anomalies
 
@@ -55,7 +55,7 @@ pip install -e .
 ### 1. GUI (with or without live capture)
 
 ```bash
-# Without root: app starts, model loads/trains, GUI opens. Click "Start Monitoring" will fail with a clear message.
+# Without root: app starts, model loads (if present), GUI opens. Click "Start Monitoring" will fail with a clear message.
 python main.py
 
 # With root (required for live packet capture):
@@ -63,7 +63,7 @@ sudo python main.py   # Linux/macOS
 # Windows: open terminal as Administrator, then: python main.py
 ```
 
-- **First run**: If no model exists, the app trains one on sample data (1–2 minutes), then opens the GUI.
+- **First run**: If no model exists in `models/`, the app runs with signature-based detection only; place a pre-trained model and scaler in `models/` to enable ML detection.
 - **Start Monitoring**: Starts packet capture. If you see "Failed to start monitoring", you need root/sudo (see above).
 - **Stop Monitoring / Clear Alerts / Export Alerts**: Use the GUI buttons.
 
@@ -87,44 +87,54 @@ python tests/replay_pcap.py path/to/file.pcap
 
 Packets are replayed through the same flow aggregation and detection logic as live capture. Useful for demos and testing without raw sockets.
 
+### Purpose of the `tests/` folder
+
+The app runs without the `tests/` folder; the GUI and live monitoring use only `main.py` and `src/`. The `tests/` folder exists to **verify detection and run offline experiments** without root or live traffic:
+
+| Script | Purpose |
+|--------|--------|
+| **`test_detection.py`** | Runs **simulated** attack flows (SQL injection, XSS, SYN flood, port scan) through the same signature and ML pipeline as live capture. Use it to confirm that detection logic works and that the model loads correctly—no admin rights or network needed. |
+| **`replay_pcap.py`** | Feeds a **saved PCAP file** (e.g. from Wireshark or tcpdump) through the same flow aggregation and detection as live capture. Use it to test with real traffic offline or to demo the IDS without capturing live. |
+
+So: the main app does not depend on `tests/`, but these scripts reuse the same detection code to check that it behaves correctly and to support PCAP-based testing.
+
 ---
 
 ## How to Test (full workflow)
 
-### Option A: Same machine, no VM
+### Option A: Nmap/tools directly (recommended)
+
+**Preferred way to test.** No VM and no Docker required.
 
 1. **Install and open GUI (no root)**  
-   `python main.py` → wait for model training (first time) → GUI opens.
+   `python main.py` → model loads from `models/` if present → GUI opens.
 2. **Verify detection logic (no root)**  
    `python tests/test_detection.py` → expect "All signature detection tests PASSED."
-3. **Live capture (with root)**  
-   `sudo python main.py` → Start Monitoring → generate traffic (browse, ping, etc.) → check alerts in the dashboard and export if needed.
+3. **Live capture and test**  
+   `sudo python main.py` → **Start Monitoring** → in another terminal (or from another PC), run:
+   - **Port scan:** `nmap -sT <HOST_IP>` (use your machine’s IP or `localhost`)
+   - **SYN flood (lab only):** `sudo hping3 -S -p 80 --flood <HOST_IP>` then **Ctrl+C** after a few seconds
+   - **SQLi-like HTTP:** `curl "http://<HOST_IP>/?id=1%20union%20select%20*"`
+4. Check alerts in the GUI. When done, **Stop Monitoring** or close the window.
 
-### Option B: VirtualBox (two VMs)
+See **[DOCKER_SETUP.md](DOCKER_SETUP.md)** for full commands and the optional Docker-based flow.
 
-Use two VMs when you want to test with real traffic between machines without affecting your host. **See [VM_SETUP.md](VM_SETUP.md)** for:
+### Option B: Docker traffic generator
 
-- **Recommended OS**: Ubuntu 22.04 LTS for both VMs (or Kali/Parrot for VM 2 if you prefer security tools preinstalled).
-- Step-by-step VirtualBox setup (create VMs, network, install Python, run HybridGuard, generate traffic).
+If you prefer to generate traffic from a container instead of installing nmap/hping3 on the host, use the Docker option in [DOCKER_SETUP.md](DOCKER_SETUP.md) (helper script: `./scripts/docker-traffic-test.sh [HOST_IP]`).
 
-Summary:
+### Option C: VirtualBox (two VMs)
 
-1. **VM 1 – HybridGuard (monitor)**  
-   - Install Python and dependencies; run: `sudo python main.py`.  
-   - Start Monitoring (sniffer on default interface; use host-only or bridged so VM 2 is on same network).
+Use two VMs only if you want an isolated lab. **See [VM_SETUP.md](VM_SETUP.md)** for setup. For most users, Option A or B (Docker) is simpler.
 
-2. **VM 2 – Traffic generator**  
-   - Install `nmap`, `hping3`; run port scan: `nmap -sT <VM1_IP>`; optionally SYN flood: `sudo hping3 -S -p 80 --flood <VM1_IP>`.
-
-3. **Observe**  
-   Alerts appear in VM 1’s GUI and in `logs/alerts.log`.
-
-### Option C: Single machine with PCAP
+### Option D: Single machine with PCAP
 
 1. Capture traffic (e.g. Wireshark) while you browse or run tools.  
 2. Save as `capture.pcap`.  
 3. Run: `python tests/replay_pcap.py capture.pcap`.  
 4. Check console output for alert counts and types.
+
+**Testing without a VM:** Use **nmap directly** (Option A) or the Docker option in [DOCKER_SETUP.md](DOCKER_SETUP.md) if you prefer.
 
 ---
 
@@ -138,11 +148,10 @@ Summary:
 
 ### First-Time Setup
 
-When you run the application for the first time:
-1. The system will check for a trained model
-2. If no model exists, it will automatically train one using sample data
-3. Training takes 1-2 minutes and creates visualization of results
-4. The trained model is saved to `models/isolation_forest_model.pkl`
+When you run the application:
+1. The system loads the pre-trained model and scaler from `models/` if present
+2. If no model exists, the app runs with **signature-based detection only** (SYN flood, port scan, SQLi, XSS, ICMP)
+3. To enable ML anomaly detection, ensure `models/isolation_forest_model.pkl` and `models/isolation_forest_model_scaler.pkl` are in place
 
 ### Using the GUI
 
@@ -152,36 +161,36 @@ When you run the application for the first time:
 4. **Export Data**: Click "Export Alerts" to save alerts to JSON file
 5. **Stop Monitoring**: Click "Stop Monitoring" to pause detection
 
-### Training with CIC-IDS2017 Dataset
+### Pre-trained models
 
-To use the real CIC-IDS2017 dataset:
-
-1. Download the dataset from [Canadian Institute for Cybersecurity](https://www.unb.ca/cic/datasets/ids-2017.html)
-2. Place CSV files in `data/cic_ids_2017/` directory
-3. Delete the existing model: `rm models/isolation_forest_model.pkl`
-4. Run the application - it will retrain on the real dataset
+This setup uses **pre-trained models** only (no training step or CSV data). The app expects `models/isolation_forest_model.pkl` and `models/isolation_forest_model_scaler.pkl`. If they are missing, the IDS runs with signature-based detection only.
 
 ## Project Structure
 
 ```
 HybridGuard/
+├── .gitignore
 ├── main.py                 # Application entry point
-├── VM_SETUP.md             # VM testing guide (OS, VirtualBox, traffic generation)
+├── pyproject.toml          # Project metadata and dependencies
+├── README.md               # This file
+├── scripts/
+│   └── docker-traffic-test.sh   # Optional: send test traffic via Docker to host IP
 ├── src/
+│   ├── __init__.py
+│   ├── alert_manager.py   # Alert handling, logging, JSON/PDF export
+│   ├── anomaly_detector.py # ML-based anomaly detection (Isolation Forest)
 │   ├── config.py           # Paths, thresholds, live feature set
-│   ├── data_loader.py      # Dataset loading and preprocessing
-│   ├── model_trainer.py    # ML model training and evaluation
+│   ├── gui.py              # Tkinter GUI (dashboard, alerts, controls)
 │   ├── packet_sniffer.py   # Real-time packet capture with Scapy
-│   ├── signature_detector.py # Rule-based detection engine
-│   ├── anomaly_detector.py # ML-based anomaly detection
-│   ├── alert_manager.py    # Alert handling and logging
-│   └── gui.py              # Tkinter GUI
-├── tests/
-│   ├── test_detection.py   # Test detection without root (simulated flows)
-│   └── replay_pcap.py      # Replay PCAP through full pipeline
-├── models/                 # Trained ML models
-├── data/                   # Dataset storage (CIC-IDS2017 or generated)
-└── logs/                   # Alert logs and exports
+│   └── signature_detector.py # Rule-based detection (SYN flood, port scan, SQLi, XSS, ICMP)
+├── tests/                  # Optional: verify detection without root (see "Purpose of the tests folder" above)
+│   ├── __init__.py
+│   ├── replay_pcap.py     # Replay a PCAP file through the same pipeline
+│   └── test_detection.py   # Simulated flows through signature + ML pipeline
+├── models/                 # Trained model and scaler (.pkl); see models/README.md
+│   └── README.md
+├── data/                    # Not used (app uses pre-trained models only)
+└── logs/                    # Alert logs and exports (created at runtime)
 ```
 
 ## Detection Methods
@@ -205,7 +214,7 @@ HybridGuard/
 
 ## Performance Metrics
 
-The system displays the following metrics after training:
+If the model was trained elsewhere, evaluation metrics may include:
 - **Accuracy**: Overall prediction accuracy
 - **Precision**: True positive rate
 - **Recall**: Detection sensitivity
@@ -220,8 +229,7 @@ The system displays the following metrics after training:
 - Replit: Packet capture may be limited in the cloud environment
 
 ⚠️ **Dataset**:
-- Sample data is generated automatically if CIC-IDS2017 is not available
-- For production use, train with real network traffic data
+- The app uses pre-trained models only; no CSV data or training is required
 
 ⚠️ **Network Interface**:
 - The system auto-selects the default network interface
@@ -231,7 +239,7 @@ The system displays the following metrics after training:
 
 - **Alert Logs**: `logs/alerts.log` - Real-time alert logging
 - **Exported Alerts**: `logs/alerts_export_*.json` - Manual exports
-- **Model Visualization**: `models/evaluation_results.png` - Training metrics
+- **Model visualization** (if present): `models/evaluation_results.png` - Evaluation metrics from when the model was trained
 
 ## Troubleshooting
 
@@ -240,14 +248,12 @@ The system displays the following metrics after training:
 - Check if another packet capture tool is running
 - Verify network interface is available
 
-### Model Training Fails
-- Check if sufficient memory is available (>2GB recommended)
-- Verify dataset files are not corrupted
+### Model fails to load
+- Ensure `models/isolation_forest_model.pkl` and `models/isolation_forest_model_scaler.pkl` exist and are compatible (21 features)
 - Check logs for specific error messages
 
 ### "Scaler/model expects 61 features" or ML errors in tests
-- The app now trains on 21 features (same as live traffic). If you have an **old model** (trained with 61 features), delete it and restart so the app retrains with 21:  
-  `rm -f models/isolation_forest_model.pkl models/isolation_forest_model_scaler.pkl` then run `python main.py` or `python tests/test_detection.py` again.
+- The app expects a model trained on 21 features (same as live traffic). If you have an **old model** (e.g. 61 features), replace it with a compatible 21-feature model and scaler, then run again.
 
 ### GUI Not Responding
 - Ensure Tkinter is installed (should be included with Python)

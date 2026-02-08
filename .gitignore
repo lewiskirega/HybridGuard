@@ -21,37 +21,42 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
-.pythonlibs/
-venv/
+# Virtual environment
 .venv/
+venv/
 ENV/
 env/
+.pythonlibs/
 
-# IDE
+# IDE / editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Logs and exports
+# --- HybridGuard runtime and generated ---
+
+# Logs and exports (logs/ created at runtime)
 logs/*.log
 logs/*.json
 logs/alerts_export_*.json
-*.log
+logs/*.pdf
 
-# Captures (keep out of repo)
-*.pcap
-*.pcapng
+# PDF reports saved in project root
+/HybridGuard_Report_*.pdf
 
-# Models (keep the directory but ignore models)
+# Trained models and training artifacts (models/README.md is tracked)
 models/*.pkl
 models/*.png
 
-# Data (keep the directory but ignore datasets)
+# Optional dataset (data/ not required; CIC-IDS2017 CSVs if used)
 data/cic_ids_2017/*.csv
 data/*.csv
+
+# Packet captures
+*.pcap
+*.pcapng
 
 # OS
 .DS_Store
@@ -60,12 +65,12 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
-# pytest
+# Testing / coverage
 .pytest_cache/
 .coverage
 htmlcov/
 
-# mypy
+# Type checking
 .mypy_cache/
 .dmypy.json
 dmypy.json

@@ -1,10 +1,11 @@
 """
 Alert Manager for IDS.
 
-Thread-safe in-memory alert list, file logging (alerts.log), and JSON export.
+Thread-safe in-memory alert list, file logging (alerts.log), JSON export, and PDF report.
 Used by IDSController to store signature and ML alerts; GUI reads via get_recent_alerts.
 """
 
+import glob
 import threading
 from datetime import datetime
 from collections import defaultdict
@@ -81,9 +82,10 @@ class AlertManager:
             return dict(self.statistics)
     
     def clear_alerts(self):
-        """Clear all alerts (for testing or reset)"""
+        """Clear all alerts (for testing or reset) and reset statistics."""
         with self.lock:
             self.alerts = []
+            self.statistics = defaultdict(int)
             logger.info("All alerts cleared")
     
     def save_alerts_to_file(self, filename=None):
@@ -132,3 +134,76 @@ class AlertManager:
             
             sorted_sources = sorted(source_counts.items(), key=lambda x: x[1], reverse=True)
             return sorted_sources[:limit]
+
+    def clear_logs_to_disk(self):
+        """Remove all non-essential log and export files from the logs directory."""
+        removed = []
+        try:
+            for path in glob.glob(os.path.join(self.log_dir, "alerts.log")):
+                os.remove(path)
+                removed.append(path)
+            for path in glob.glob(os.path.join(self.log_dir, "alerts_export_*.json")):
+                os.remove(path)
+                removed.append(path)
+            if removed:
+                logger.info(f"Cleared log files: {len(removed)} file(s)")
+            return removed
+        except Exception as e:
+            logger.error(f"Error clearing logs: {e}")
+            return []
+
+    def save_alerts_to_pdf(self, filepath=None):
+        """Save current alerts and statistics as a PDF report. Returns path or None."""
+        try:
+            from fpdf import FPDF
+        except ImportError:
+            logger.error("fpdf2 is required for PDF export. Install with: pip install fpdf2")
+            return None
+        if filepath is None:
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filepath = os.path.join(self.log_dir, f'HybridGuard_Report_{ts}.pdf')
+        with self.lock:
+            stats = dict(self.statistics)
+            alerts = list(self.alerts)
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=10)
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(0, 10, "HybridGuard IDS Report", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Summary", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, f"Total alerts: {stats.get('total', 0)}  |  Critical: {stats.get('CRITICAL', 0)}  |  High: {stats.get('HIGH', 0)}  |  Medium: {stats.get('MEDIUM', 0)}  |  Low: {stats.get('LOW', 0)}", ln=True)
+        pdf.ln(6)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Alerts", ln=True)
+        pdf.set_font("Helvetica", "", 9)
+        col_w = (28, 22, 32, 22, 86)  # Time, Source, Type, Severity, Description
+        headers = ("Time", "Source", "Type", "Severity", "Description")
+        for h in headers:
+            pdf.cell(col_w[headers.index(h)], 7, h[:14], border=1, fill=True)
+        pdf.ln()
+        for alert in alerts[:200]:
+            t = str(alert.get("timestamp", ""))[:18]
+            src = str(alert.get("source", ""))[:18]
+            typ = str(alert.get("type", ""))[:28]
+            sev = str(alert.get("severity", ""))[:18]
+            desc = str(alert.get("description", ""))[:82]
+            pdf.cell(col_w[0], 6, t, border=1)
+            pdf.cell(col_w[1], 6, src, border=1)
+            pdf.cell(col_w[2], 6, typ, border=1)
+            pdf.cell(col_w[3], 6, sev, border=1)
+            pdf.cell(col_w[4], 6, desc, border=1)
+            pdf.ln()
+        if len(alerts) > 200:
+            pdf.cell(0, 6, f"... and {len(alerts) - 200} more alerts.", ln=True)
+        try:
+            pdf.output(filepath)
+            logger.info(f"PDF report saved to {filepath}")
+            return filepath
+        except Exception as e:
+            logger.error(f"Error saving PDF: {e}")
+            return None

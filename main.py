@@ -10,8 +10,6 @@ alert manager, and GUI. Run with root/sudo for live packet capture (see VM_SETUP
 """
 
 import tkinter as tk
-from src.data_loader import DataLoader
-from src.model_trainer import ModelTrainer
 from src.packet_sniffer import PacketSniffer
 from src.signature_detector import SignatureDetector
 from src.anomaly_detector import AnomalyDetector
@@ -20,11 +18,8 @@ from src.gui import IDSGUI
 from src.config import (
     MODEL_PATH,
     get_scaler_path,
-    LOG_DIR,
     FLOW_TIMEOUT_SEC,
     CLEANUP_STATS_EVERY_N_FLOWS,
-    TRAIN_CONTAMINATION,
-    TRAIN_N_ESTIMATORS,
 )
 import logging
 import os
@@ -52,67 +47,29 @@ class IDSController:
         self.packet_count = 0
 
     def initialize(self):
-        """Load or train the ML model and scaler; prepare for monitoring."""
+        """Load the pre-trained ML model and scaler; prepare for monitoring."""
         logger.info("Initializing HybridGuard IDS...")
         os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
         scaler_path = get_scaler_path()
 
         if not os.path.exists(MODEL_PATH):
-            logger.info("Trained model not found. Training new model (using live feature set)...")
-            if not self.train_model():
-                logger.warning("Model training failed. Using signature-based detection only.")
-                return False
-        else:
-            success = self.anomaly_detector.load_model()
-            if success:
-                if os.path.exists(scaler_path):
-                    import joblib
-                    self.scaler = joblib.load(scaler_path)
-                    self.anomaly_detector.set_scaler(self.scaler)
-                    logger.info("Model and scaler loaded successfully")
-                else:
-                    logger.warning("Scaler file not found. ML detection may not work correctly.")
+            logger.warning("Trained model not found. Using signature-based detection only. Place model and scaler in models/ to enable ML detection.")
+            return True
+        success = self.anomaly_detector.load_model()
+        if success:
+            if os.path.exists(scaler_path):
+                import joblib
+                self.scaler = joblib.load(scaler_path)
+                self.anomaly_detector.set_scaler(self.scaler)
+                logger.info("Model and scaler loaded successfully")
             else:
-                logger.warning("Could not load ML model. Using signature-based detection only.")
+                logger.warning("Scaler file not found. ML detection may not work correctly.")
+        else:
+            logger.warning("Could not load ML model. Using signature-based detection only.")
 
         logger.info("IDS initialization complete")
         return True
-    
-    def train_model(self):
-        """Train the Isolation Forest on (normal) traffic; use 21 live features only."""
-        try:
-            logger.info("Loading and preprocessing dataset...")
-            data_loader = DataLoader()
-            
-            df = data_loader.load_csv_files()
-            X, y, features = data_loader.preprocess_data(df)
-            
-            X_train, X_test, y_train, y_test = data_loader.split_data(
-                X, y, train_ratio=0.7, use_normal_only=True
-            )
-            
-            X_train_scaled, X_test_scaled = data_loader.normalize_features(X_train, X_test)
-            
-            self.scaler = data_loader.get_scaler()
-            self.anomaly_detector.set_scaler(self.scaler)
-            
-            logger.info("Training Isolation Forest model...")
-            trainer = ModelTrainer(
-                contamination=TRAIN_CONTAMINATION,
-                n_estimators=TRAIN_N_ESTIMATORS,
-            )
-            trainer.train(X_train_scaled)
-            results = trainer.evaluate(X_test_scaled, y_test)
-            trainer.visualize_results(results)
-            trainer.save_model(model_path=MODEL_PATH, scaler=self.scaler)
-            
-            logger.info("Model training completed successfully!")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error during model training: {e}")
-            return False
-    
+
     def process_flow(self, flow_features):
         """
         Run one flow through detection: signature rules first, then ML if no signature hit.
@@ -187,12 +144,20 @@ class IDSController:
         self.packet_count = 0
     
     def export_alerts(self):
-        """Export alerts to file"""
+        """Export alerts to JSON file"""
         return self.alert_manager.save_alerts_to_file()
+
+    def clear_logs(self):
+        """Clear all log and export files from disk (non-essential files)."""
+        return self.alert_manager.clear_logs_to_disk()
+
+    def export_alerts_pdf(self, filepath=None):
+        """Export alerts report to PDF. Returns path or None."""
+        return self.alert_manager.save_alerts_to_pdf(filepath)
 
 
 def main():
-    """Start HybridGuard: load/train model, open GUI, run event loop."""
+    """Start HybridGuard: load pre-trained model, open GUI, run event loop."""
     logger.info("Starting Hybrid Intrusion Detection System...")
     
     controller = IDSController()
